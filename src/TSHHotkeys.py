@@ -22,6 +22,8 @@ class TSHHotkeysSignals(QObject):
     reset_scores = Signal()
     load_set = Signal()
     swap_teams = Signal()
+    refresh_phase_group = Signal()
+    limit_export = Signal()
 
 class TSHHotkeys(QObject):
     instance: "TSHHotkeys" = None
@@ -36,7 +38,9 @@ class TSHHotkeys(QObject):
         "team2_score_up": "Ctrl+F3",
         "team2_score_down": "Ctrl+F4",
         "reset_scores": "Ctrl+R",
-        "swap_teams": "Ctrl+S"
+        "swap_teams": "Ctrl+S",
+        "refresh_phase_group": "Ctrl+P",
+        "limit_export": "Ctrl+B",
     }
 
     loaded_keys = {}
@@ -45,15 +49,18 @@ class TSHHotkeys(QObject):
 
     def __init__(self) -> None:
         super().__init__()
-        self.LoadUserHotkeys()
+        if SettingsManager.Get("hotkeys.hotkeys_enabled", True):
+            self.LoadUserHotkeys()
 
     def UiMounted(self, parent):
         self.parent = parent
-        self.SetupHotkeys()
+        if SettingsManager.Get("hotkeys.hotkeys_enabled", True):
+            self.SetupHotkeys()
 
     def ReloadHotkeys(self):
-        self.LoadUserHotkeys()
-        self.SetupHotkeys()
+        if SettingsManager.Get("hotkeys.hotkeys_enabled", True):
+            self.LoadUserHotkeys()
+            self.SetupHotkeys()
     
     def SetupHotkeys(self):
         if self.pynputListener:
@@ -76,7 +83,7 @@ class TSHHotkeys(QObject):
         self.pynputListener.start()
     
     def HotkeyTriggered(self, k, v):
-        if not SettingsManager.Get("hotkeys.hotkeys_enabled", True) == False:
+        if not SettingsManager.Get("hotkeys.hotkeys_enabled", True):
             logger.info(f"Activated {k} by pressing {v}")
             getattr(self.signals, k).emit()
     

@@ -15,7 +15,7 @@ import orjson
 from loguru import logger
 
 from .StateManager import StateManager
-from .TSHWebServerActions import WebServerActions
+from .TSHWebServerActions import WebServerActions, ScoreboardNotAvailable
 from .TSHScoreboardManager import TSHScoreboardManager
 from .TSHCommentaryWidget import TSHCommentaryWidget
 from .SettingsManager import SettingsManager
@@ -67,13 +67,25 @@ class WebServer(QThread):
         self.host_name = "0.0.0.0"
         self.port = SettingsManager.Get("general.webserver_port", 5000)
 
+    @staticmethod
+    @app.before_request
+    def log_request():
+        logger.info(f"[FLASK] → {request.method} {request.path} from {request.remote_addr}")
+
+    @staticmethod
+    @app.after_request
+    def log_response(response):
+        logger.info(f"[FLASK] ← {request.method} {request.path} [{response.status_code}]")
+        return response
+
     @app.route('/program-state')
     def program_state():
         return WebServer.actions.program_state()
 
     @socketio.on('program-state-update')
     def ws_program_state_update(message):
-        WebServer.ws_emit('program_state_update', {})
+        # Manual trigger to push full state to all clients
+        WebServer.ws_program_state()
 
     def on_program_state_update(changes):
         if len(changes) > 0:
@@ -94,6 +106,10 @@ class WebServer(QThread):
     @socketio.on('program_state')
     def ws_program_state(message=None):
         WebServer.ws_emit('program_state', WebServer.actions.program_state())
+
+    @app.errorhandler(ScoreboardNotAvailable)
+    def handle_scoreboard_not_available(e):
+        return str(e), 503
 
     @socketio.on_error_default
     def ws_on_error(e):
@@ -646,7 +662,8 @@ class WebServer(QThread):
 
     @socketio.on('set_tournament')
     def ws_set_tournament(message):
-        WebServer.ws_emit('set_tournament', WebServer.actions.load_tournament(request.args.get('url')))
+        info = orjson.loads(message) if isinstance(message, (str, bytes)) else message
+        WebServer.ws_emit('set_tournament', WebServer.actions.load_tournament(info.get('url')))
 
     @app.route('/states')
     def get_states():
@@ -682,16 +699,20 @@ class WebServer(QThread):
             if filename.lower().endswith('.png'):
                 mimetype = "image/apng"
 
+            ext = filename.rsplit('.', 1)[-1].lower()
+            cache_duration = 0 if ext in ('html', 'js', 'css', 'json') else 86400
+
             return send_from_directory(
                 os.path.abspath('.'),
                 filename,
                 as_attachment=filename.endswith('.gz'),
                 mimetype=mimetype,
-                max_age=86400
+                max_age=cache_duration
             )
 
         except Exception as e:
             logger.error(f"File not found: {e}")
+            return "File not found", 404
 
     def run(self):
         try:
