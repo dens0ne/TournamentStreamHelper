@@ -33,6 +33,12 @@ class StateManager:
     threads = []
     loop = None
 
+    # State paths whose subtrees are excluded from the out/ file export.
+    # Use this for large lookup tables that are only useful as JSON (e.g. game.stages).
+    EXPORT_EXCLUDED_PREFIXES = (
+        "root['game']['stages']",
+    )
+
     @contextlib.contextmanager
     def SaveBlock():
         StateManager.BlockSaving()
@@ -186,6 +192,9 @@ class StateManager:
         # logger.info(mergedDiffs)
 
         for changeKey, change in mergedDiffs:
+            if any(changeKey.startswith(p) for p in StateManager.EXPORT_EXCLUDED_PREFIXES):
+                continue
+
             # Remove "root[" from start and separate keys
             filename = "/".join(changeKey[5:].replace(
                 "'", "").replace("]", "").replace("/", "_").split("["))
@@ -202,6 +211,9 @@ class StateManager:
         removedKeys = diff.get("dictionary_item_removed", {})
 
         for key in removedKeys:
+            if any(key.startswith(p) for p in StateManager.EXPORT_EXCLUDED_PREFIXES):
+                continue
+
             item = extract(oldState, key)
 
             # Remove "root[" from start and separate keys
@@ -215,6 +227,9 @@ class StateManager:
         addedKeys = diff.get("dictionary_item_added", {})
 
         for key in addedKeys:
+            if any(key.startswith(p) for p in StateManager.EXPORT_EXCLUDED_PREFIXES):
+                continue
+
             try:
                 item = extract(StateManager.state, key)
 
@@ -233,6 +248,11 @@ class StateManager:
                 logger.error(traceback.format_exc())
 
     def CreateFilesDict(path, di):
+        parts = [p for p in path.split("/") if p]
+        state_key = "root" + "".join(f"['{p}']" for p in parts)
+        if any(state_key.startswith(p) for p in StateManager.EXPORT_EXCLUDED_PREFIXES):
+            return
+
         pathdirs = "/".join(path.split("/")[0:-1])
 
         if not os.path.isdir("./out/"+pathdirs):
@@ -299,6 +319,11 @@ class StateManager:
                     file.write(str(di))
 
     def RemoveFilesDict(path, di):
+        parts = [p for p in path.split("/") if p]
+        state_key = "root" + "".join(f"['{p}']" for p in parts)
+        if any(state_key.startswith(p) for p in StateManager.EXPORT_EXCLUDED_PREFIXES):
+            return
+
         pathdirs = "/".join(path.split("/")[0:-1])
 
         if type(di) == dict:

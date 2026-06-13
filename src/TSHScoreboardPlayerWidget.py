@@ -12,10 +12,13 @@ from .StateManager import StateManager
 from .TSHGameAssetManager import TSHGameAssetManager
 from .Helpers.TSHControllerHelper import TSHControllerHelper
 from .TSHPlayerDB import TSHPlayerDB
+from .TSHTournamentDataProvider import TSHTournamentDataProvider
 from .Helpers.TSHDirHelper import TSHResolve
 from .Workers import Worker
 import threading
 from .Helpers.TSHBadWordFilter import TSHBadWordFilter
+from .Helpers.TSHCustomPlayerCompleter import TSHCustomPlayerCompleter
+from .Helpers.TSHLocaleHelper import TSHLocaleHelper
 from loguru import logger
 
 
@@ -25,6 +28,8 @@ class TSHScoreboardPlayerWidgetSignals(QObject):
     player2Id_changed = Signal()
     player_seed_changed = Signal()
     dataChanged = Signal()
+    nameChanged = Signal(str)
+    characterChanged = Signal()
 
 
 class TSHScoreboardPlayerWidget(QGroupBox):
@@ -246,6 +251,7 @@ class TSHScoreboardPlayerWidget(QGroupBox):
 
             StateManager.Set(
                 f"{self.path}.character", characters)
+            self.instanceSignals.characterChanged.emit()
 
             if includeMains:
                 StateManager.Set(
@@ -269,6 +275,8 @@ class TSHScoreboardPlayerWidget(QGroupBox):
 
             self.lastExportedName = merged
 
+            self.SetRomanizedText()
+
     def ExportMergedName(self):
         with self.dataLock:
             team = self.findChild(QLineEdit, "team").text()
@@ -290,6 +298,7 @@ class TSHScoreboardPlayerWidget(QGroupBox):
                 f"{self.path}.mergedName", merged)
             StateManager.Set(
                 f"{self.path}.mergedOnlyName", nameOnlyMerged)
+            self.instanceSignals.nameChanged.emit(merged)
 
     def ExportPlayerImages(self, onlineAvatar=None):
         with self.dataLock:
@@ -364,6 +373,12 @@ class TSHScoreboardPlayerWidget(QGroupBox):
                             f"{w.path}.id")
                         data["seed"] = StateManager.Get(
                             f"{w.path}.seed")
+                        data["wins"] = StateManager.Get(
+                            f"{w.path}.wins")
+                        data["losses"] = StateManager.Get(
+                            f"{w.path}.losses")
+                        data["winPercentage"] = StateManager.Get(
+                            f"{w.path}.winPercentage")
                         data["city"] = StateManager.Get(
                             f"{w.path}.city")
                         tmpData.append(data)
@@ -383,7 +398,11 @@ class TSHScoreboardPlayerWidget(QGroupBox):
                                 if type(widget) == QCheckBox:
                                     widget.setChecked(tmpData[i][objName])
                         w.ExportPlayerId(tmpData[i]["id"])
+                        StateManager.Set(f"{w.path}.online_avatar", tmpData[i]["online_avatar"])
                         StateManager.Set(f"{w.path}.seed", tmpData[i]["seed"])
+                        StateManager.Set(f"{w.path}.wins", tmpData[i]["wins"])
+                        StateManager.Set(f"{w.path}.losses", tmpData[i]["losses"])
+                        StateManager.Set(f"{w.path}.winPercentage", tmpData[i]["winPercentage"])
                         StateManager.Set(f"{w.path}.city", tmpData[i]["city"])
         finally:
             StateManager.ReleaseSaving()
@@ -631,6 +650,7 @@ class TSHScoreboardPlayerWidget(QGroupBox):
             country.lineEdit().setFont(QFont(country.font().family(), 9))
 
             country.currentIndexChanged.connect(self.LoadStates)
+            country.currentIndexChanged.connect(self.SetRomanizedText)
 
             state: QComboBox = self.findChild(QComboBox, "state")
             state.completer().setFilterMode(Qt.MatchFlag.MatchContains)
@@ -715,7 +735,8 @@ class TSHScoreboardPlayerWidget(QGroupBox):
 
     def SetupAutocomplete(self):
         if TSHPlayerDB.model:
-            self.findChild(QLineEdit, "name").setCompleter(QCompleter())
+            self.findChild(QLineEdit, "name").setCompleter(
+                TSHCustomPlayerCompleter(TSHPlayerDB.model))
             self.findChild(QLineEdit, "name").completer().activated[QModelIndex].connect(
                 lambda x: self.SetData(x.data(Qt.ItemDataRole.UserRole)) if x is not None else None, Qt.QueuedConnection)
             self.findChild(QLineEdit, "name").completer().setCaseSensitivity(
@@ -754,6 +775,13 @@ class TSHScoreboardPlayerWidget(QGroupBox):
                         self.SetData(item, dontLoadFromDB=True,
                                      clear=False, no_mains=no_mains)
                         break
+
+            # Provider-side lazy enrichment (e.g. parry → mains from a
+            # linked start.gg account). No-op for providers that don't
+            # override EnrichPlayerData; cached so repeated loads are free.
+            provider = TSHTournamentDataProvider.instance.provider if TSHTournamentDataProvider.instance else None
+            if provider is not None:
+                data = provider.EnrichPlayerData(data) or data
 
             name = self.findChild(QWidget, "name")
             if data.get("gamerTag") and data.get("gamerTag") != name.text():
@@ -910,6 +938,12 @@ class TSHScoreboardPlayerWidget(QGroupBox):
                     self.findChild(QSpinBox, "seed").setValue(int(data.get("seed")))
                 else:
                     self.findChild(QSpinBox, "seed").setValue(0)
+            if data.get("wins") is not None:
+                StateManager.Set(f"{self.path}.wins", data.get("wins"))
+            if data.get("losses") is not None:
+                StateManager.Set(f"{self.path}.losses", data.get("losses"))
+            if data.get("winPercentage") is not None:
+                StateManager.Set(f"{self.path}.winPercentage", data.get("winPercentage"))
             if data.get("city"):
                 StateManager.Set(f"{self.path}.city", data.get("city"))
         finally:
@@ -1034,4 +1068,23 @@ class TSHScoreboardPlayerWidget(QGroupBox):
                         continue  # only executed if the inner loop DID break
                 else:
                     c.setCurrentIndex(0)
+        
+        StateManager.Unset(f"{self.path}.online_avatar")
+        StateManager.Unset(f"{self.path}.wins")
+        StateManager.Unset(f"{self.path}.losses")
+        StateManager.Unset(f"{self.path}.winPercentage")
         StateManager.ReleaseSaving()
+
+    def SetRomanizedText(self):
+        name = self.findChild(QWidget, "name").text()
+        team = self.findChild(QWidget, "team").text()
+        romanized_data = {"name": name, "team": team}
+        country = self.findChild(QComboBox, "country")
+        if country.currentData(Qt.ItemDataRole.UserRole) != None:
+            country_code = country.currentData(Qt.ItemDataRole.UserRole).get("code")
+            if country_code:
+                romanized_data = {
+                    "name": TSHLocaleHelper.RomanizeTextFromCountry(name, country_code),
+                    "team": TSHLocaleHelper.RomanizeTextFromCountry(team, country_code)
+                }
+        StateManager.Set(f"{self.path}.romanized_data", romanized_data)

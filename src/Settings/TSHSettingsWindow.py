@@ -2,7 +2,7 @@ from qtpy.QtCore import *
 from qtpy.QtWidgets import *
 from .SettingsWidget import SettingsWidget
 from ..TSHHotkeys import TSHHotkeys
-from ..Helpers.TSHVersionHelper import add_beta_label
+from ..Helpers.TSHVersionHelper import add_beta_label, get_beta_status
 
 
 class TSHSettingsWindow(QDialog):
@@ -43,7 +43,7 @@ class TSHSettingsWindow(QDialog):
                 "settings.general", "Webserver Port"),
             "webserver_port",
             "spinbox",
-            5000
+            5500
         ))
 
         generalSettings.append((
@@ -140,7 +140,7 @@ class TSHSettingsWindow(QDialog):
                 "settings.disable_individual_game_tracker", "Disables the individual game tracker (takes effect on next restart)"), "game_tracker"),
             "disable_individual_game_tracker",
             "checkbox",
-            True
+            get_beta_status("game_tracker")
         ))
 
         generalSettings.append((
@@ -314,6 +314,24 @@ class TSHSettingsWindow(QDialog):
         
         self.add_setting_widget(QApplication.translate(
             "settings", "Bluesky"), SettingsWidget("bsky_account", bskySettings))
+        
+        # Add API Key settings
+        APIKeySettings = []
+        APIKeySettings.append((
+            QApplication.translate(
+                "settings.api_keys", "ParryGG"),
+            "parrygg",
+            "password",
+            "",
+            None,
+            QApplication.translate(
+                "settings.api_keys", "You can get an API Key from parry.gg/api-keys") + "\n" +
+                QApplication.translate(
+                    "settings.api_keys", "Please note that the API Key will be stored in plain text on your computer")
+        ))
+        
+        self.add_setting_widget(QApplication.translate(
+            "settings", "API Keys"), SettingsWidget("api_keys", APIKeySettings))
 
         self.resize(1000, 500)
         QApplication.processEvents()

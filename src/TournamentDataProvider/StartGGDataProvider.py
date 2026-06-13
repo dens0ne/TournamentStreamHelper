@@ -37,6 +37,7 @@ class StartGGDataProvider(TournamentDataProvider):
     TournamentPhaseGroupQuery = None
     TournamentStandingsQuery = None
     UserSetQuery = None
+    UserMainsQuery = None
     _request_timeout_secs = 20.0
 
     player_seeds = {}
@@ -354,7 +355,7 @@ class StartGGDataProvider(TournamentDataProvider):
             result.update({"new": fetchNew.result if fetchNew.completed else {}})
             result.update({"old": fetchOld.result if fetchOld.completed else {}})
 
-            logger.debug(result)
+            # logger.debug(result)
 
             finalResult = {}
             finalResult.update(result["new"])
@@ -389,7 +390,7 @@ class StartGGDataProvider(TournamentDataProvider):
                             except:
                                 logger.debug(traceback.format_exc())
 
-            logger.debug(f"Final result: {finalResult}")
+            # logger.debug(f"Final result: {finalResult}")
 
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -428,7 +429,7 @@ class StartGGDataProvider(TournamentDataProvider):
                     "query": StartGGDataProvider.SetQuery
                 }
             )
-            logger.debug(data.get("data", {}).get("set", {}))
+            # logger.debug(data.get("data", {}).get("set", {}))
             return self.ParseMatchDataNewApi(data.get("data", {}).get("set", {}))
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -469,7 +470,7 @@ class StartGGDataProvider(TournamentDataProvider):
                 )
 
                 totalPages = deep_get(
-                    data, "data.event.sets.pageInfo.totalPages", 0)
+                    data, "data.event.sets.pageInfo.totalPages", 1)
 
                 sets = deep_get(data, "data.event.sets.nodes", [])
                 newSets = []
@@ -483,8 +484,8 @@ class StartGGDataProvider(TournamentDataProvider):
                     logger.info(f"progress_callback: {page}, {totalPages}")
                     progress_callback(page, totalPages)
 
-                page += 1
                 logger.info(f"Fetching sets... {page}/{totalPages}")
+                page += 1
             return (final_data)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -556,10 +557,13 @@ class StartGGDataProvider(TournamentDataProvider):
             "Winners Quarter-Final": "winners_quarter_final",
             "Losers Final": "losers_final",
             "Losers Semi-Final": "losers_semi_final",
-            "Losers Quarter-Final": "losers_quarter_final"
+            "Losers Quarter-Final": "losers_quarter_final",
+            "Final": "single_elim_final",
+            "Semi-Final": "single_elim_semi_final",
+            "Quarter-Final": "single_elim_quarter_final"
         }
 
-        if name in roundMapping:
+        if name in roundMapping and TSHLocaleHelper.matchNames.get(roundMapping.get(name)):
             return TSHLocaleHelper.matchNames.get(roundMapping.get(name))
 
         try:
@@ -606,6 +610,9 @@ class StartGGDataProvider(TournamentDataProvider):
 
             setData = {
                 "id": _set.get("id"),
+                "round": _set.get("round"),
+                "groupCount" : deep_get(_set, "phaseGroup.phase.groupCount"),
+                "numSeeds": deep_get(_set, "phaseGroup.phase.numSeeds", -1),
                 "team1score": _set.get("entrant1Score", 0),
                 "team2score": _set.get("entrant2Score", 0),
                 "round_name": round_name,
@@ -734,9 +741,54 @@ class StartGGDataProvider(TournamentDataProvider):
                     if setData.get(f"p{i+1}_seed"):
                         playerData["seed"] = setData.get(f"p{i+1}_seed")
 
+                    if i == 0:
+                        standings = deep_get(p1.get("entrant", {}), "standing.setRecordWithoutByes", {})
+                        playerData["wins"] = standings.get("wins", '0')
+                        playerData["losses"] = standings.get("losses", '0')
+                        playerData["winPercentage"] = standings.get("winPercentage", 'N/A')
+                    else:
+                        standings = deep_get(p2.get("entrant", {}), "standing.setRecordWithoutByes", {})
+                        playerData["wins"] = standings.get("wins", '0')
+                        playerData["losses"] = standings.get("losses", '0')
+                        playerData["winPercentage"] = standings.get("winPercentage", 'N/A')
+
                     players[i].append(playerData)
 
             setData["entrants"] = players
+
+            # Per-game data (stage + characters + winner per game)
+            entrant1_id = str(p1.get("entrant", {}).get("id", "")) if p1.get("entrant") else ""
+            entrant2_id = str(p2.get("entrant", {}).get("id", "")) if p2.get("entrant") else ""
+            raw_games = _set.get("games") or []
+            games_data = []
+            for game in sorted(raw_games, key=lambda g: g.get("orderNum") or 0):
+                entry = {}
+                stage_id = deep_get(game, "stage.id")
+                if stage_id:
+                    stage = TSHGameAssetManager.instance.GetStageFromStartGGId(int(stage_id))
+                    if stage:
+                        entry["stage_codename"] = stage[1].get("codename")
+                winner_id = str(game.get("winnerId") or "")
+                if winner_id == entrant1_id:
+                    entry["winner"] = 1
+                elif winner_id == entrant2_id:
+                    entry["winner"] = 2
+                team1_chars, team2_chars = [], []
+                for sel in (game.get("selections") or []):
+                    sel_entrant_id = str(deep_get(sel, "entrant.id") or "")
+                    char_id = sel.get("selectionValue")
+                    if char_id:
+                        char = TSHGameAssetManager.instance.GetCharacterFromStartGGId(char_id)
+                        char_data = char[1] if char else None
+                        if sel_entrant_id == entrant1_id:
+                            team1_chars.append(char_data)
+                        elif sel_entrant_id == entrant2_id:
+                            team2_chars.append(char_data)
+                entry["team1_chars"] = team1_chars
+                entry["team2_chars"] = team2_chars
+                games_data.append(entry)
+            if games_data:
+                setData["games"] = games_data
 
             return setData
         except Exception as e:
@@ -1147,6 +1199,12 @@ class StartGGDataProvider(TournamentDataProvider):
         return {}
 
     def GetStreamMatchId(self, streamName):
+        # Accept either a bare identifier string or the station dict produced
+        # by GetStations (parry's multi-capacity streams need the dict for slot
+        # context; start.gg streams are always capacity 1, so just use the
+        # identifier).
+        if isinstance(streamName, dict):
+            streamName = streamName.get("identifier", "")
         streamSet = None
 
         try:
@@ -1340,20 +1398,56 @@ class StartGGDataProvider(TournamentDataProvider):
                         set, "phaseGroup.displayIdentifier")
                 phaseName = deep_get(set, "phaseGroup.phase.name")
 
-                player1Info = set.get("slots", [{}])[0].get("entrant", {}).get(
-                    "participants", [{}])[0].get("player", {})
-                player1Seed = set.get(
-                    "slots", [{}])[0].get("initialSeedNum", 0)
+                slot0 = set.get("slots", [{}])[0]
+                slot1 = set.get("slots", [{}, {}])[1]
 
-                player2Info = set.get("slots", [{}, {}])[1].get("entrant", {}).get(
+                player1Info = slot0.get("entrant", {}).get(
                     "participants", [{}])[0].get("player", {})
-                player2Seed = set.get(
-                    "slots", [{}])[1].get("initialSeedNum", 0)
+                player1Seed = slot0.get("initialSeedNum", 0)
+                slot0_entrant_id = slot0.get("entrant", {}).get("id")
+
+                player2Info = slot1.get("entrant", {}).get(
+                    "participants", [{}])[0].get("player", {})
+                player2Seed = slot1.get("initialSeedNum", 0)
+                slot1_entrant_id = slot1.get("entrant", {}).get("id")
+
+                # Count character selections per entrant from game data
+                chars_by_entrant = {
+                    slot0_entrant_id: Counter(),
+                    slot1_entrant_id: Counter(),
+                }
+                for game in (set.get("games") or []):
+                    for selection in (game.get("selections") or []):
+                        eid = deep_get(selection, "entrant.id")
+                        char_id = selection.get("selectionValue")
+                        if eid in chars_by_entrant and char_id:
+                            chars_by_entrant[eid][char_id] += 1
+
+                def _resolve_char_dict(entrant_id):
+                    result = {}
+                    for idx, (char_id, _) in enumerate(chars_by_entrant.get(entrant_id, Counter()).most_common(), 1):
+                        char = TSHGameAssetManager.instance.GetCharacterFromStartGGId(char_id)
+                        if not char:
+                            continue
+                        _key, char_info = char
+                        codename = char_info.get("codename", _key)
+                        assets = TSHGameAssetManager.instance.GetCharacterAssets(codename, 0)
+                        result[str(idx)] = {
+                            "name": char_info.get("display_name", codename),
+                            "codename": codename,
+                            "assets": assets,
+                            "skin": 0,
+                            "variant": {}
+                        }
+                    return result
 
                 players = ["1", "2"]
-
                 if player1Info.get("id") != playerID:
                     players.reverse()
+
+                # focused player is in players[0], opponent in players[1]
+                focused_entrant = slot0_entrant_id if player1Info.get("id") == playerID else slot1_entrant_id
+                oponent_entrant = slot1_entrant_id if player1Info.get("id") == playerID else slot0_entrant_id
 
                 player_set = {
                     "phase_id": phaseIdentifier,
@@ -1366,7 +1460,9 @@ class StartGGDataProvider(TournamentDataProvider):
                     f"player{players[1]}_score": set.get("entrant2Score") if set.get("entrant2Score") is not None else "0",
                     f"player{players[1]}_seed": player2Seed,
                     f"player{players[1]}_team": player2Info.get("prefix"),
-                    f"player{players[1]}_name": player2Info.get("gamerTag")
+                    f"player{players[1]}_name": player2Info.get("gamerTag"),
+                    "player_char": {"character": _resolve_char_dict(focused_entrant)},
+                    "oponent_char": {"character": _resolve_char_dict(oponent_entrant)},
                 }
 
                 set_data.append(player_set)
@@ -1626,12 +1722,13 @@ class StartGGDataProvider(TournamentDataProvider):
                     if _set.get("entrant1Score") == -1 or _set.get("entrant2Score") == -1:
                         continue
 
+                    slot0_entrant_id = str(_set.get("slots", [{}])[0].get("entrant", {}).get("id") or "")
+                    slot1_entrant_id = str(_set.get("slots", [{}])[1].get("entrant", {}).get("id") or "")
+
                     playerToEntrant = {}
 
-                    playerToEntrant[id1[0]] = str(_set.get("slots", [{}])[
-                        0].get("entrant", {}).get("id"))
-                    playerToEntrant[id2[0]] = str(_set.get("slots", [{}])[
-                        1].get("entrant", {}).get("id"))
+                    playerToEntrant[id1[0]] = slot0_entrant_id
+                    playerToEntrant[id2[0]] = slot1_entrant_id
 
                     winner = 0
 
@@ -1653,12 +1750,48 @@ class StartGGDataProvider(TournamentDataProvider):
                         else:
                             score = ["L", "W"]
 
+                    # Count characters per entrant from game selections
+                    chars_by_entrant = {slot0_entrant_id: Counter(), slot1_entrant_id: Counter()}
+                    for game in (_set.get("games") or []):
+                        for selection in (game.get("selections") or []):
+                            eid = str(selection.get("entrant", {}).get("id") or "")
+                            char_id = selection.get("selectionValue")
+                            if eid in chars_by_entrant and char_id:
+                                chars_by_entrant[eid][char_id] += 1
+
+                    def _resolve_char_dict_recent(eid):
+                        result = {}
+                        for idx, (char_id, _) in enumerate(chars_by_entrant.get(eid, Counter()).most_common(), 1):
+                            char = TSHGameAssetManager.instance.GetCharacterFromStartGGId(char_id)
+                            if not char:
+                                continue
+                            _key, char_info = char
+                            codename = char_info.get("codename", _key)
+                            assets = TSHGameAssetManager.instance.GetCharacterAssets(codename, 0)
+                            result[str(idx)] = {
+                                "name": char_info.get("display_name", codename),
+                                "codename": codename,
+                                "assets": assets,
+                                "skin": 0,
+                                "variant": {}
+                            }
+                        return result
+
+                    # p1id is slot[0]'s player; map to the "first player" in this worker call (id1)
+                    if p1id == id1[0]:
+                        p1_char_dict = _resolve_char_dict_recent(slot0_entrant_id)
+                        p2_char_dict = _resolve_char_dict_recent(slot1_entrant_id)
+                    else:
+                        p1_char_dict = _resolve_char_dict_recent(slot1_entrant_id)
+                        p2_char_dict = _resolve_char_dict_recent(slot0_entrant_id)
+
                     if inverted:
                         score.reverse()
                         if winner == 1:
                             winner = 0
                         elif winner == 0:
                             winner = 1
+                        p1_char_dict, p2_char_dict = p2_char_dict, p1_char_dict
 
                     entry = {
                         "id": _set.get("id"),
@@ -1670,7 +1803,9 @@ class StartGGDataProvider(TournamentDataProvider):
                         "winner": winner,
                         "round": StartGGDataProvider.TranslateRoundName(_set.get("fullRoundText")),
                         "phase_name": phaseName,
-                        "phase_id": phaseIdentifier
+                        "phase_id": phaseIdentifier,
+                        "p1_char": {"character": p1_char_dict},
+                        "p2_char": {"character": p2_char_dict},
                     }
                     recentSets.append(entry)
             return recentSets
@@ -1836,6 +1971,41 @@ class StartGGDataProvider(TournamentDataProvider):
 
         return (playerData)
 
+    def GetUserMains(self, slug, videogameId):
+        # Per-user mains lookup (no other code path fetches mains for a
+        # user in isolation — see ProcessEntrantData/GetMatch which only
+        # populate mains as a side effect of an event-scoped query).
+        # Reuses ProcessEntrantData's selection-counting via a synthesized
+        # entrant, then runs the character-ID → TSH-codename mapping
+        # locally (the mapping is normally inside ProcessEntrantData's
+        # `if user:` branch, which doesn't apply to a user-only synthesis).
+        # Returns ({gameCodename: [[char_name], ...]}) or {}.
+        if not slug or not videogameId:
+            return {}
+        data = self.QueryRequests(
+            "https://www.start.gg/api/-/gql",
+            type=requests.post,
+            jsonParams={
+                "operationName": "UserMainsQuery",
+                "variables": {"userSlug": slug, "videogameId": videogameId},
+                "query": StartGGDataProvider.UserMainsQuery,
+            },
+        )
+        player = deep_get(data, "data.user.player")
+        if not player:
+            return {}
+        startgg_mains = StartGGDataProvider.ProcessEntrantData({"player": player}).get("startggMains") or []
+        selected = TSHGameAssetManager.instance.selectedGame or {}
+        gameCodename = selected.get("codename")
+        if not gameCodename:
+            return {}
+        mains = []
+        for sggmain in startgg_mains:
+            mapped = TSHGameAssetManager.instance.GetCharacterFromStartGGId(sggmain[0])
+            if mapped:
+                mains.append([mapped[0]])
+        return {gameCodename: mains} if mains else {}
+
     def GetStandings(self, playerNumber, progress_callback, cancel_event):
         try:
             data = self.QueryRequests(
@@ -1858,6 +2028,7 @@ class StartGGDataProvider(TournamentDataProvider):
 
             for standing in standings:
                 team = {}
+                logger.info(standing)
 
                 participants = deep_get(standing, "entrant.participants")
 
@@ -1865,6 +2036,9 @@ class StartGGDataProvider(TournamentDataProvider):
                     team["name"] = deep_get(standing, "entrant.name")
 
                 team["players"] = []
+                team["wins"] = deep_get(standing, "setRecordWithoutByes.wins", 0)
+                team["losses"] = deep_get(standing, "setRecordWithoutByes.losses", 0)
+                team["winPercentage"] = deep_get(standing, "setRecordWithoutByes.winPercentage", "N/A")
 
                 for entrant in participants:
                     team["players"].append(StartGGDataProvider.ProcessEntrantData(
@@ -1975,4 +2149,5 @@ StartGGDataProvider.TournamentPhasesQuery = readQueryFile(sggTdpDir, "Tournament
 StartGGDataProvider.TournamentPhaseGroupQuery = readQueryFile(sggTdpDir, "TournamentPhaseGroup")
 StartGGDataProvider.TournamentStandingsQuery = readQueryFile(sggTdpDir, "TournamentStandings")
 StartGGDataProvider.UserSetQuery = readQueryFile(sggTdpDir, "UserSet")
+StartGGDataProvider.UserMainsQuery = readQueryFile(sggTdpDir, "UserMains")
 StartGGDataProvider.TournamentSlugQuery = readQueryFile(sggTdpDir, "TournamentSlug")

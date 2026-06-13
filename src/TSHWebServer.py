@@ -13,6 +13,7 @@ from flask_cors import CORS, cross_origin
 from flask_socketio import SocketIO, emit
 import orjson
 from loguru import logger
+import socket
 
 from .StateManager import StateManager
 from .TSHWebServerActions import WebServerActions, ScoreboardNotAvailable
@@ -680,6 +681,21 @@ class WebServer(QThread):
         return WebServer.actions.get_states(args.get('countryCode', ''))
 
 
+    # Set the current ingame stage (selectedStage in stage_strike state)
+    @app.post('/scoreboard<scoreboardNumber>-set-current-stage')
+    def set_current_stage(scoreboardNumber):
+        data = request.get_json()
+        return WebServer.actions.set_current_stage(scoreboardNumber, data.get("codename"))
+
+    @socketio.on('set_current_stage')
+    def ws_set_current_stage(message):
+        if isinstance(message, (str, bytes)):
+            data = orjson.loads(message)
+        else:
+            data = message
+        WebServer.ws_emit('set_current_stage', WebServer.actions.set_current_stage(
+            data.get("scoreboardNumber", "1"), data.get("codename")))
+
     @app.route('/')
     @app.route('/scoreboard')
     @app.route('/stage-strike-app')
@@ -716,7 +732,20 @@ class WebServer(QThread):
 
     def run(self):
         try:
+            logger.info(f'Starting TSH Web Server at {self.GetIP()}:{self.port}')
             self.socketio.run(app=self.app, host=self.host_name, port=self.port,
                               debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
         except Exception as e:
             logger.error(traceback.format_exc())
+    
+    def GetIP(self):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # doesn't even have to be reachable
+            s.connect(('10.255.255.255', 1))
+            IP = s.getsockname()[0]
+        except Exception:
+            IP = '127.0.0.1'
+        finally:
+            s.close()
+        return IP

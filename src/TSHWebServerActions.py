@@ -84,6 +84,11 @@ class WebServerActions(QThread):
                     f"p{t}": " / ".join(names)
                 })
 
+            # Country code of the first player on this team (for per-player language)
+            player_1 = StateManager.Get(f"score.1.team.{i+1}.player.1", {}) or {}
+            country = player_1.get("country")
+            data[f"p{t}_country"] = country.get("code") if isinstance(country, dict) else None
+
         # Add set data
         data.update({
             "best_of": StateManager.Get(f"score.1.best_of"),
@@ -141,6 +146,7 @@ class WebServerActions(QThread):
     def reset(self):
         self.stageWidget.stageStrikeLogic.Initialize()
         self.UpdateScore()
+        self._get_scoreboard(0).individualGameTracker.ResetAllStages()
         return "OK"
 
     @gui_thread_sync
@@ -160,7 +166,6 @@ class WebServerActions(QThread):
         self._get_scoreboard(1).signals.ChangeSetData.emit({
             "team1score": score[0],
             "team2score": score[1],
-            "reset_score": True
         })
 
     @gui_thread_sync
@@ -175,7 +180,6 @@ class WebServerActions(QThread):
                 logger.warning(f"Couldn't parse scoreboard [${score['scoreboard']}] from /post_data as int, falling back to scoreboard 1")
                 scoreboard_number = 1
 
-        score.update({"reset_score": True})
         self._get_scoreboard(scoreboard_number).signals.ChangeSetData.emit(score)
         return "OK"
 
@@ -261,7 +265,37 @@ class WebServerActions(QThread):
             )
         return "OK"
 
+    def _resolve_character_name(self, name: str) -> str:
+        """Resolve a character identifier to its en_name.
+        Checks codename first, then en_name. Returns the input unchanged if no match."""
+        characters = TSHGameAssetManager.instance.characters
+        for en_name, char_data in characters.items():
+            if char_data.get("codename") == name:
+                return en_name
+        return name
+
+    def _resolve_mains(self, mains):
+        """Resolve character codenames to en_names in a mains structure."""
+        if isinstance(mains, list):
+            return [
+                [self._resolve_character_name(entry[0])] + list(entry[1:])
+                if entry else entry
+                for entry in mains
+            ]
+        if isinstance(mains, dict):
+            return {
+                game: [
+                    [self._resolve_character_name(entry[0])] + list(entry[1:])
+                    if entry else entry
+                    for entry in entries
+                ]
+                for game, entries in mains.items()
+            }
+        return mains
+
     def set_team_data(self, scoreboard, team, player, data):
+        if data and "mains" in data:
+            data = {**data, "mains": self._resolve_mains(data["mains"])}
         sb = self._get_scoreboard(scoreboard)
         sb.signals.ChangeSetData.emit({
             "team": team,
@@ -305,6 +339,7 @@ class WebServerActions(QThread):
                 "name": TSHGameAssetManager.instance.games[key].get("name"),
                 "locale": TSHGameAssetManager.instance.games[key].get("locale"),
                 "smashgg_game_id": TSHGameAssetManager.instance.games[key].get("smashgg_game_id"),
+                "igdb_game_id": TSHGameAssetManager.instance.games[key].get("igdb_game_id"),
                 "has_stages": bool(TSHGameAssetManager.instance.games[key].get("stage_to_codename")),
                 "has_variants": bool(TSHGameAssetManager.instance.games[key].get("variant_to_codename")),
                 "has_colors": bool(TSHGameAssetManager.instance.games[key].get("preset_colors"))
@@ -531,7 +566,9 @@ class WebServerActions(QThread):
             return "OK"
         else:
             validators = [
-                QRegularExpression("start.gg/tournament/[^/]+/event[s]?/[^/]+")
+                QRegularExpression("start.gg/tournament/[^/]+/event[s]?/[^/]+"),
+                
+                QRegularExpression("parry.gg/[^/]+/[^/]+")
             ]
 
             for validator in validators:
@@ -548,6 +585,17 @@ class WebServerActions(QThread):
                     # Some URLs in startgg have eventS but the API doesn't work with that format
                     url = url.replace("/events/", "/event/")
 
+            elif "parry.gg" in url:
+                # Remove the "_manage" part of admin urls first
+                url = url.replace("/_manage", "")
+
+                matches = re.match(
+                    "(.*parry.gg/[^/]*/[^/]*)", url)
+
+                if matches:
+                    url = matches.group()
+
+
             SettingsManager.Set("TOURNAMENT_URL", url)
             TSHTournamentDataProvider.instance.signals.tournament_url_update.emit(url)
             
@@ -556,3 +604,13 @@ class WebServerActions(QThread):
     @gui_thread_sync
     def get_states(self, countryCode: str):
         return TSHCountryHelper.GetStates(countryCode)
+
+    @gui_thread_sync
+    def set_current_stage(self, scoreboard, codename):
+        stage_data = StateManager.Get(f"game.stages.{codename}") if codename else None
+        with StateManager.SaveBlock():
+            StateManager.Set(f"score.{scoreboard}.stage_strike.selectedStage", codename)
+            StateManager.Set(f"score.{scoreboard}.stage_strike.selectedStageData", stage_data)
+        curr_game = StateManager.Get(f"score.{scoreboard}.stage_strike.currGame", 0)
+        self._get_scoreboard(scoreboard).individualGameTracker.SetStage(curr_game, codename)
+        return "OK"

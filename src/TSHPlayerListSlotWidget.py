@@ -132,10 +132,17 @@ class TSHPlayerListSlotWidget(QGroupBox):
         else:
             self.slotName.setText("")
             self.slotName.editingFinished.emit()
+            
+        StateManager.Set(f"{self.base}.slot.{self.index}.wins", data.get("wins"))
+        StateManager.Set(f"{self.base}.slot.{self.index}.loses", data.get("losses"))
+        StateManager.Set(f"{self.base}.slot.{self.index}.winPercentage", data.get("winPercentage"))
 
         for i, pw in enumerate(self.playerWidgets):
             if data.get("players"):
                 try:
+                    data.get("players")[i]["wins"] = data.get("wins")
+                    data.get("players")[i]["losses"] = data.get("losses")
+                    data.get("players")[i]["winPercentage"] = data.get("winPercentage")
                     pw.SetData(data.get("players")[i])
                 except:
                     pw.Clear()

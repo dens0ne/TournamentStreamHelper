@@ -62,3 +62,4 @@ env
 desktop.ini
 assets/*_tmp
 layout_*
+venv
