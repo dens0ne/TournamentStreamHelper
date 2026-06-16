@@ -860,17 +860,13 @@ class Window(QMainWindow):
         TSHTournamentDataProvider.instance.signals.tournament_changed.connect(
             lambda x=None: self.moddedContentCheck.setChecked(False))
 
+        self.pendingAssetReload = False
+
         self.gameReloadBtn = QPushButton()
         self.gameReloadBtn.setIcon(QApplication.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.gameReloadBtn.setToolTip(QApplication.translate("app", "Reload game assets"))
         self.gameReloadBtn.setFixedSize(24, 24)
-        self.gameReloadBtn.clicked.connect(
-            lambda: TSHGameAssetManager.instance.LoadGameAssets(
-                self.gameSelect.currentData(),
-                mods_active=self.moddedContentCheck.isChecked(),
-                mods_reload_mode=True,
-            )
-        )
+        self.gameReloadBtn.clicked.connect(self.ReloadAssetConfigs)
 
         pre_base_layout.addLayout(base_layout)
         hbox.addWidget(self.gameSelect)
@@ -1093,6 +1089,10 @@ class Window(QMainWindow):
 
         super().closeEvent(event)
 
+    def ReloadAssetConfigs(self):
+        self.pendingAssetReload = True
+        TSHGameAssetManager.instance.LoadGames()
+
     def ReloadGames(self):
         logger.info("Reload games")
         with StateManager.SaveBlock():
@@ -1122,6 +1122,13 @@ class Window(QMainWindow):
             self.gameSelect.setView(view)
             self.gameSelect.model().sort(0)
             self.SetGame()
+            if self.pendingAssetReload:
+                self.pendingAssetReload = False
+                TSHGameAssetManager.instance.LoadGameAssets(
+                    self.gameSelect.currentData(),
+                    mods_active=self.moddedContentCheck.isChecked(),
+                    mods_reload_mode=True,
+                )
 
     def DetectGameFromId(self, id):
         def detect_smashgg_id_match(games, game, id):
