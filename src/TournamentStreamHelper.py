@@ -318,8 +318,17 @@ class Window(QMainWindow):
         super().__init__()
 
         StateManager.loop = loop
-        StateManager.BlockSaving()
 
+        # Startup is expected to hold the block for a long time, so it opts out
+        # of the stuck-block watchdog.
+        with StateManager.SaveBlock(watchdog=False):
+            self.SetupUi()
+
+        TSHScoreboardManager.instance.signals.ScoreboardAmountChanged.connect(
+            self.ToggleTopOption)
+        StateManager.Unset("completed_sets")
+
+    def SetupUi(self):
         TSHLocaleHelper.LoadLocale()
         TSHLocaleHelper.LoadRoundNames()
         self.LoadTheme()
@@ -849,6 +858,11 @@ class Window(QMainWindow):
 
         TSHGameAssetManager.instance.signals.onLoad.connect(_on_game_load)
 
+        TSHGameAssetManager.instance.signals.onLoad.connect(lambda x=None: [
+            self.moddedContentWidget.setVisible(TSHGameAssetManager.instance.has_modded_content),
+            self.moddedContentCheck.setChecked(StateManager.Get("game").get("mods_active", False))
+        ])
+
         self.moddedContentCheck.stateChanged.connect(lambda x=None: [
             print("Checked: "+ str(self.moddedContentCheck.isChecked())),
             TSHGameAssetManager.instance.LoadGameAssets(self.gameSelect.currentData(), mods_active=self.moddedContentCheck.isChecked(), mods_reload_mode=True)
@@ -859,7 +873,7 @@ class Window(QMainWindow):
             lambda x=None: self.moddedContentCheck.setChecked(False))
         TSHTournamentDataProvider.instance.signals.tournament_changed.connect(
             lambda x=None: self.moddedContentCheck.setChecked(False))
-
+        
         self.gameReloadBtn = QPushButton()
         self.gameReloadBtn.setIcon(QApplication.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.gameReloadBtn.setToolTip(QApplication.translate("app", "Reload game assets"))
@@ -940,12 +954,6 @@ class Window(QMainWindow):
             self.webserver.ws_playerdb
         )
         TSHPlayerDB.LoadDB()
-
-        StateManager.ReleaseSaving()
-
-        TSHScoreboardManager.instance.signals.ScoreboardAmountChanged.connect(
-            self.ToggleTopOption)
-        StateManager.Unset("completed_sets")
 
     def SetGame(self, mods_active = False):
         index = next((i for i in range(self.gameSelect.model().rowCount()) if self.gameSelect.itemText(i) == TSHGameAssetManager.instance.selectedGame.get(

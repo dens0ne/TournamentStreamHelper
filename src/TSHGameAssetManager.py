@@ -302,9 +302,10 @@ class TSHGameAssetManager(QObject):
                         for c in self.parent().characters.keys():
                             self.parent().stockIcons[c] = {}
 
+                            pattern = re.compile(f'({assetsObj.get("prefix", "")})({self.parent().characters[c].get("codename")})({assetsObj.get("postfix", "")})([0-9]*)\\.([A-Za-z0-9]+)')
                             filteredFiles = \
-                                [f for f in files if f.startswith(assetsObj.get(
-                                    "prefix", "")+self.parent().characters[c].get("codename")+assetsObj.get("postfix", ""))]
+                                [f for f in files if pattern.match(f)]
+
 
                             if len(filteredFiles) == 0:
                                 # Store path only — QImage must be created on the main thread
@@ -341,9 +342,9 @@ class TSHGameAssetManager(QObject):
                                 files = sorted(os.listdir(
                                     './user_data/games/'+game_dir+'/'+assetsKey))
 
+                                pattern = re.compile(f'({asset.get("prefix", "")})({self.parent().characters[c].get("codename")})({asset.get("postfix", "")})([0-9]*)\\.([A-Za-z0-9]+)')
                                 filteredFiles = \
-                                    [f for f in files if f.startswith(asset.get(
-                                        "prefix", "")+self.parent().characters[c].get("codename")+asset.get("postfix", ""))]
+                                    [f for f in files if pattern.match(f)]
 
                                 for f in filteredFiles:
                                     numberStart = f.rfind(
@@ -555,18 +556,19 @@ class TSHGameAssetManager(QObject):
                             "name": self.parent().selectedGame.get("name"),
                             "smashgg_id": self.parent().selectedGame.get("smashgg_game_id"),
                             "codename": self.parent().selectedGame.get("codename"),
-                            "logo": self.parent().selectedGame.get("path", "")+"/base_files/logo.png",
+                            "logo": self.parent().selectedGame.get("logo_path") or self.parent().selectedGame.get("path", "")+"/base_files/logo.png",
                             "defaults": self.parent().selectedGame.get("defaults"),
                             "mods_active": self.mods_active,
                             "has_stages": bool(self.parent().selectedGame.get("stage_to_codename")),
                             "has_variants": bool(self.parent().selectedGame.get("variant_to_codename")),
-                            "has_colors": bool(self.parent().selectedGame.get("preset_colors"))
+                            "has_colors": bool(self.parent().selectedGame.get("preset_colors")),
+                            "igdb_id": self.parent().selectedGame.get("igdb_game_id")
                         })
 
                         self.parent().has_modded_content = False
                         self.parent().UpdateCharacterModel(self.mods_active)
                         self.parent().UpdateSkinModel()
-                        self.parent().UpdateVariantModel()
+                        self.parent().UpdateVariantModel(self.mods_active)
                         self.parent().UpdateColorModel()
                         self.parent().UpdateStageModel(self.mods_active)
 
@@ -638,9 +640,9 @@ class TSHGameAssetManager(QObject):
                         for c in self.parent.characters.keys():
                             self.parent.stockIcons[c] = {}
 
+                            pattern = re.compile(f'({assetsObj.get("prefix", "")})({self.parent().characters[c].get("codename")})({assetsObj.get("postfix", "")})([0-9]*)\\.([A-Za-z0-9]+)')
                             filteredFiles = \
-                                [f for f in files if f.startswith(assetsObj.get(
-                                    "prefix", "")+self.parent.characters[c].get("codename")+assetsObj.get("postfix", ""))]
+                                [f for f in files if pattern.match(f)]
 
                             if len(filteredFiles) == 0:
                                 # Store path only — QImage must be created on the main thread
@@ -677,9 +679,9 @@ class TSHGameAssetManager(QObject):
                                 files = sorted(os.listdir(
                                     './user_data/games/'+game_dir+'/'+assetsKey))
 
+                                pattern = re.compile(f'({asset.get("prefix", "")})({self.parent().characters[c].get("codename")})({asset.get("postfix", "")})([0-9]*)\\.([A-Za-z0-9]+)')
                                 filteredFiles = \
-                                    [f for f in files if f.startswith(asset.get(
-                                        "prefix", "")+self.parent.characters[c].get("codename")+asset.get("postfix", ""))]
+                                    [f for f in files if pattern.match(f)]
 
                                 for f in filteredFiles:
                                     numberStart = f.rfind(
@@ -881,18 +883,19 @@ class TSHGameAssetManager(QObject):
                         "name": self.parent.selectedGame.get("name"),
                         "smashgg_id": self.parent.selectedGame.get("smashgg_game_id"),
                         "codename": self.parent.selectedGame.get("codename"),
-                        "logo": self.parent.selectedGame.get("path", "")+"/base_files/logo.png",
+                        "logo": self.parent.selectedGame.get("logo_path") or self.parent.selectedGame.get("path", "")+"/base_files/logo.png",
                         "defaults": self.parent.selectedGame.get("defaults"),
                         "mods_active": mods_active,
                         "has_stages": bool(self.parent.selectedGame.get("stage_to_codename")),
                         "has_variants": bool(self.parent.selectedGame.get("variant_to_codename")),
-                        "has_colors": bool(self.parent.selectedGame.get("preset_colors"))
+                        "has_colors": bool(self.parent.selectedGame.get("preset_colors")),
+                        "igdb_id": self.parent.selectedGame.get("igdb_game_id")
                     })
 
                     self.parent.has_modded_content = False
                     self.parent.UpdateCharacterModel(mods_active)
                     self.parent.UpdateSkinModel()
-                    self.parent.UpdateVariantModel()
+                    self.parent.UpdateVariantModel(mods_active)
                     self.parent.UpdateColorModel()
                     self.parent.UpdateStageModel(mods_active)
 
@@ -1003,8 +1006,11 @@ class TSHGameAssetManager(QObject):
                     "display_name") != stage[1].get("en_name") else stage[1].get("display_name"))
                 item_with_blank.setData(stage[1], Qt.ItemDataRole.UserRole)
 
+                availability = stage[1].get("igdb_playable_list", [])
+                igdb_id = self.selectedGame.get("igdb_game_id")
                 if stage[1].get("modded"):
-                    self.has_modded_content = True
+                    if not availability or igdb_id in availability:
+                        self.has_modded_content = True
 
                 if (not mods_active) and stage[1].get("modded"):
                     item.setEnabled(False)
@@ -1012,8 +1018,14 @@ class TSHGameAssetManager(QObject):
                     item_with_blank.setEnabled(False)
                     item_with_blank.setSelectable(False)
                 else:
-                    self.stageModel.appendRow(item)
-                    self.stageModelWithBlank.appendRow(item_with_blank)
+                    if availability and igdb_id not in availability:
+                        item.setEnabled(False)
+                        item.setSelectable(False)
+                        item_with_blank.setEnabled(False)
+                        item_with_blank.setSelectable(False)
+                    else:
+                        self.stageModel.appendRow(item)
+                        self.stageModelWithBlank.appendRow(item_with_blank)
 
                 worker = Worker(self.LoadStageImage, *[stage[1], item])
                 worker_blank = Worker(self.LoadStageImage, *[stage[1], item_with_blank])
@@ -1069,8 +1081,6 @@ class TSHGameAssetManager(QObject):
             return (None)
 
     def UpdateCharacterModel(self, mods_active = True):
-        # TODO: Make modded content disabled by default
-        # TODO: Add checkbox on game bar to enable / disable modded content
         try:
             self.characterModel = QStandardItemModel()
 
@@ -1101,14 +1111,21 @@ class TSHGameAssetManager(QObject):
 
                 item.setData(data, Qt.ItemDataRole.UserRole)
 
+                availability = self.characters[c].get("igdb_playable_list", [])
+                igdb_id = self.selectedGame.get("igdb_game_id")
                 if data.get("modded"):
-                    self.has_modded_content = True
+                    if not availability or igdb_id in availability:
+                        self.has_modded_content = True
 
                 if (not mods_active) and data.get("modded"):
                     item.setEnabled(False)
                     item.setSelectable(False)
                 else:
-                    self.characterModel.appendRow(item)
+                    if availability and igdb_id not in availability:
+                        item.setEnabled(False)
+                        item.setSelectable(False)
+                    else:
+                        self.characterModel.appendRow(item)
 
             self.characterModel.sort(0)
         except:
@@ -1152,7 +1169,7 @@ class TSHGameAssetManager(QObject):
             logger.error(traceback.format_exc())
 
 
-    def UpdateVariantModel(self):
+    def UpdateVariantModel(self, mods_active=True):
         try:
             self.variantModel = QStandardItemModel()
 
@@ -1169,9 +1186,9 @@ class TSHGameAssetManager(QObject):
                     "name": self.variants[c].get("export_name"),
                     "en_name": c,
                     "display_name": self.variants[c].get("display_name"),
-                    "codename": self.variants[c].get("codename")
+                    "codename": self.variants[c].get("codename"),
+                    "modded": self.variants[c].get("modded", False)
                 }
-
                 
                 data["icon_path"] = self.GetVariantIconPath(data["codename"])
                 data["image_size"] = self.GetVariantIconSize(data["codename"])
@@ -1186,8 +1203,23 @@ class TSHGameAssetManager(QObject):
                     item.setData(
                         f'{self.variants[c].get("display_name")} / {c}', Qt.ItemDataRole.EditRole)
 
+                availability = self.variants[c].get("igdb_playable_list", [])
+                igdb_id = self.selectedGame.get("igdb_game_id")
+                if data.get("modded"):
+                    if not availability or igdb_id in availability:
+                        self.has_modded_content = True
+
                 item.setData(data, Qt.ItemDataRole.UserRole)
-                self.variantModel.appendRow(item)
+                if (not mods_active) and data.get("modded"):
+                    item.setEnabled(False)
+                    item.setSelectable(False)
+                else:
+                    if availability and igdb_id not in availability:
+                        item.setEnabled(False)
+                        item.setSelectable(False)
+                    else:
+                        self.variantModel.appendRow(item)
+
 
             self.variantModel.sort(0)
         except:
@@ -1195,6 +1227,8 @@ class TSHGameAssetManager(QObject):
 
     def GetVariantIconPath(self, variant_codename):
         game_codename = self.selectedGame.get("codename")
+        if "__alt_" in game_codename:
+            game_codename = game_codename.split("__alt_")[0]
         icon_path, asset_root_path = "", "./user_data/games"
         icon_config_path = f"{asset_root_path}/{game_codename}/variant_icon/config.json"
         if os.path.isfile(icon_config_path):
@@ -1502,14 +1536,15 @@ class TSHGameAssetManager(QObject):
 
                     baseName = asset.get(
                         "prefix", "")+characterCodename+asset.get("postfix", "")
+                    pattern = f"({baseName})([0-9]*)\\.([A-Za-z0-9])"
 
                     skinFileList = [f for f in os.listdir(
-                        assetPath) if f.startswith(baseName)]
+                        assetPath) if re.match(pattern, f)]
 
                     skinFiles = {}
 
                     for f in skinFileList:
-                        skinId = f[len(baseName):].rsplit(".", 1)[0]
+                        skinId = re.search(pattern, f).group(2)
                         if skinId == "":
                             skinId = 0
                         else:
@@ -1658,6 +1693,26 @@ class TSHGameAssetManager(QObject):
         stage = next((s for s in self.stages.items() if str(
             s[1].get("smashgg_id")) == str(smashgg_id)), None)
         return stage
+
+    def GetCharacterFromParryGGSlug(self, parrygg_slug: str):
+        # parry.gg identifies a character by a URL-friendly slug (e.g.
+        # "doctor-mario"); the game asset pack stores that slug on each
+        # character as `parrygg_slug`. Mirrors GetCharacterFromStartGGId:
+        # returns the (key, character_dict) tuple or None.
+        if not parrygg_slug:
+            return None
+        character = next((c for c in self.characters.items() if c[1].get(
+            "parrygg_slug") == parrygg_slug), None)
+        if character is None:
+            # Distinguish "no character matched this slug" from "no character
+            # in this game defines parrygg_slug at all" (i.e. the asset pack
+            # predates the parrygg_slug prop) to make tracing easier.
+            with_prop = sum(1 for c in self.characters.values() if c.get("parrygg_slug"))
+            logger.debug(
+                f"GetCharacterFromParryGGSlug: no match for slug '{parrygg_slug}'; "
+                f"{with_prop}/{len(self.characters)} characters in the loaded game define 'parrygg_slug'"
+            )
+        return character
 
 
 if not os.path.exists("./user_data/games"):
