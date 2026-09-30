@@ -31,12 +31,21 @@ class TSHBracketWidgetSignals(QObject):
 class TSHBracketWidget(QDockWidget):
     instance: "TSHBracketWidget" = None
     def __init__(self, *args):
-        StateManager.BlockSaving()
-        super().__init__(*args)
+        with StateManager.SaveBlock():
+            super().__init__(*args)
+            self.SetupUi()
 
+        TSHBracketWidget.instance = self
+
+    def SetupUi(self):
         uic.loadUi(TSHResolve("src/layout/TSHBracket.ui"), self)
 
         StateManager.Set("bracket", {})
+
+        # Guards against UpdatePhaseGroup being re-entered while it pumps the
+        # event loop; see UpdatePhaseGroup.
+        self.updatingPhaseGroup = False
+        self.pendingPhaseGroupData = None
 
         TSHTournamentDataProvider.instance.signals.tournament_phases_updated.connect(
             self.UpdatePhases)
@@ -208,10 +217,6 @@ class TSHBracketWidget(QDockWidget):
             self.SetDefaultsFromAssets
         )
 
-        StateManager.ReleaseSaving()
-        
-        TSHBracketWidget.instance = self
-
     def UpdatePhases(self, phases):
         logger.info("Phases: " + str(phases))
         self.phaseSelection.clear()
@@ -277,11 +282,53 @@ class TSHBracketWidget(QDockWidget):
                 _set.finished = False
 
     def UpdatePhaseGroup(self, phaseGroupData):
-        StateManager.BlockSaving()
-        self.playerList.signals.DataChanged.disconnect()
+        # This method pumps the event loop (processEvents) while it runs, so a
+        # second phase group payload can be delivered right in the middle of it.
+        # Re-entering would unbalance the DataChanged connection and the save
+        # block, so newer data is queued and applied after the current run.
+        if self.updatingPhaseGroup:
+            self.pendingPhaseGroupData = phaseGroupData
+            return
+
+        while True:
+            self.updatingPhaseGroup = True
+
+            try:
+                with StateManager.SaveBlock():
+                    self.ApplyPhaseGroup(phaseGroupData)
+            finally:
+                self.updatingPhaseGroup = False
+
+            if self.pendingPhaseGroupData is None:
+                break
+
+            phaseGroupData = self.pendingPhaseGroupData
+            self.pendingPhaseGroupData = None
+
+    def ApplyPhaseGroup(self, phaseGroupData):
+        try:
+            self.playerList.signals.DataChanged.disconnect(
+                self.bracketView.Update)
+            reconnectDataChanged = True
+        except TypeError:
+            # Nothing was connected; don't reconnect something we didn't unhook.
+            reconnectDataChanged = False
 
         try:
-            logger.info("Phase Group Data: " + str(phaseGroupData))
+            # logger.info("Phase Group Data: " + str(phaseGroupData))
+
+            entrants = phaseGroupData.get("entrants") or []
+            sets = phaseGroupData.get("sets") or {}
+
+            # A partial fetch (e.g. one of the paginated StartGG requests
+            # coming back empty/erroring) leaves entrants and sets out of
+            # sync. Building the bracket from a mismatched pair crashes with
+            # an IndexError once real set data is dropped into a bracket
+            # sized for the wrong number of entrants, so bail out instead.
+            if not entrants and sets:
+                logger.warning(
+                    "Phase group fetch looks partial (no entrants but sets present); skipping bracket rebuild")
+                return
 
             if phaseGroupData.get("progressionsIn", {}) != None:
                 self.progressionsIn.setValue(
@@ -307,7 +354,7 @@ class TSHBracketWidget(QDockWidget):
             # Make sure progressions are exported
             QGuiApplication.processEvents()
 
-            self.playerList.LoadFromStandings(phaseGroupData.get("entrants"))
+            self.playerList.LoadFromStandings(entrants)
 
             # Wait for the player list to update
             QGuiApplication.processEvents()
@@ -321,12 +368,12 @@ class TSHBracketWidget(QDockWidget):
             self.playerPerTeam.blockSignals(False)
 
             self.RebuildBracket(
-                len(phaseGroupData.get("entrants")),
+                len(entrants),
                 phaseGroupData.get("seedMap"),
                 phaseGroupData.get("customSeeding", False)
             )
 
-            for r, round in phaseGroupData.get("sets", {}).items():
+            for r, round in (phaseGroupData.get("sets") or {}).items():
                 for s, _set in enumerate(round):
                     try:
                         score = _set.get("score")
@@ -349,9 +396,9 @@ class TSHBracketWidget(QDockWidget):
         except:
             logger.error(traceback.format_exc())
         finally:
-            StateManager.ReleaseSaving()
-            self.playerList.signals.DataChanged.connect(
-                self.bracketView.Update)
+            if reconnectDataChanged:
+                self.playerList.signals.DataChanged.connect(
+                    self.bracketView.Update)
 
     def SetDefaultsFromAssets(self):
         if StateManager.Get(f'game.defaults'):

@@ -24,8 +24,6 @@ class TSHTeamPlayerWidgetSignals(QObject):
     activeStatus_changed = Signal(int)
     deathStatus_changed = Signal(int)
     toggleDeathTrigger = Signal(bool)
-    nameChanged = Signal(str)
-    characterChanged = Signal()
 
 
 class TSHTeamPlayerWidget(QGroupBox):
@@ -78,21 +76,17 @@ class TSHTeamPlayerWidget(QGroupBox):
 
         self.character_elements = []
 
-        bottom_buttons_layout = QHBoxLayout()
-        bottom_buttons_layout.setSpacing(4)
-        self.layout().addLayout(bottom_buttons_layout, 99, 0, 1, 3)
-
-        self.clear_bt = QPushButton(QApplication.translate("app", "Clear"))
-        self.clear_bt.setFont(QFont(self.clear_bt.font().family(), 9))
-        # self.clear_bt.setFont(self.parent.font_small)
-        self.clear_bt.setIcon(QIcon('assets/icons/undo.svg'))
-        bottom_buttons_layout.addWidget(self.clear_bt)
-        self.clear_bt.clicked.connect(self.Clear)
-        self.clear_bt.setMinimumWidth(1)
-
-        # Move up/down
+        # Clear and Move up/down
         titleContainer = self.findChild(QHBoxLayout, "titleContainer")
         titleContainer.setSpacing(4)
+
+        self.clear_bt = QPushButton()
+        self.clear_bt.setFixedSize(24, 24)
+        self.clear_bt.setIcon(QIcon('assets/icons/undo.svg'))
+        self.clear_bt.setToolTip(QApplication.translate("app", "Clear"))
+        self.clear_bt.clicked.connect(self.Clear)
+        titleContainer.addWidget(self.clear_bt)
+
         self.btMoveUp = QPushButton()
         self.btMoveUp.setFixedSize(24, 24)
         self.btMoveUp.setIcon(QIcon("./assets/icons/arrow_up.svg"))
@@ -130,6 +124,11 @@ class TSHTeamPlayerWidget(QGroupBox):
         self.findChild(QCheckBox, "dead").toggled.connect(
             lambda state, element=c: [
                 self.ExportEliminatedStatus()
+        ])
+
+        self.findChild(QCheckBox, "activePlayer").toggled.connect(
+            lambda state: [
+                self.ExportActiveStatus()
         ])
         
         self.dynamicSpinner.valueChanged.connect(self.instanceSignals.dynamicSpinner_changed.emit)
@@ -311,7 +310,6 @@ class TSHTeamPlayerWidget(QGroupBox):
 
             StateManager.Set(
                 f"{self.path}.character", characters)
-            self.instanceSignals.characterChanged.emit()
 
             if includeMains:
                 StateManager.Set(
@@ -351,7 +349,6 @@ class TSHTeamPlayerWidget(QGroupBox):
                 f"{self.path}.mergedName", merged)
             StateManager.Set(
                 f"{self.path}.mergedOnlyName", nameOnlyMerged)
-            self.instanceSignals.nameChanged.emit(merged)
 
     def ExportPlayerImages(self, onlineAvatar=None):
         with self.dataLock:
@@ -406,6 +403,10 @@ class TSHTeamPlayerWidget(QGroupBox):
                                 data[widget.objectName()] = widget.currentIndex()
                             if type(widget) == QPlainTextEdit:
                                 data[widget.objectName()] = widget.toPlainText()
+                            if type(widget) == QCheckBox:
+                                data[widget.objectName()] = widget.isChecked()
+                            if type(widget) == QSpinBox:
+                                data[widget.objectName()] = widget.value()
                         data["online_avatar"] = StateManager.Get(
                             f"{w.path}.online_avatar")
                         data["id"] = StateManager.Get(
@@ -426,10 +427,16 @@ class TSHTeamPlayerWidget(QGroupBox):
                                     widget.setCurrentIndex(tmpData[i][objName])
                                 if type(widget) == QPlainTextEdit:
                                     widget.setPlainText(tmpData[i][objName])
+                                if type(widget) == QCheckBox:
+                                    widget.setChecked(tmpData[i][objName])
+                                if type(widget) == QSpinBox:
+                                    widget.setValue(tmpData[i][objName])
                         QCoreApplication.processEvents()
                         w.ExportPlayerImages(tmpData[i]["online_avatar"])
                         # w.ExportPlayerId(tmpData[i]["id"])
                         StateManager.Set(f"{w.path}.city", tmpData[i]["city"])
+                        w.ExportActiveStatus()
+                        w.ExportEliminatedStatus()
         finally:
             StateManager.ReleaseSaving()
 
@@ -605,8 +612,10 @@ class TSHTeamPlayerWidget(QGroupBox):
         self.CharactersChanged(includeMains=True)
 
     def SwapCharacters(self, index1: int, index2: int):
-        StateManager.BlockSaving()
+        with StateManager.SaveBlock():
+            self.DoSwapCharacters(index1, index2)
 
+    def DoSwapCharacters(self, index1: int, index2: int):
         if index2 > len(self.character_elements)-1:
             index2 = 0
 
@@ -639,8 +648,6 @@ class TSHTeamPlayerWidget(QGroupBox):
         char2[2].setCurrentIndex(tmp[1])
 
         self.CharactersChanged()
-
-        StateManager.ReleaseSaving()
 
     def LoadCountries(self):
         try:
@@ -754,11 +761,14 @@ class TSHTeamPlayerWidget(QGroupBox):
 
     def SetData(self, data, dontLoadFromDB=False, clear=True, no_mains=False):
         self.dataLock.acquire()
-        StateManager.BlockSaving()
 
         logger.debug(f"Setting data for {self.path}: {data}")
 
+        # BlockSaving() lives inside the try so that the finally below always
+        # releases it, even if one of the calls in between raises.
         try:
+            StateManager.BlockSaving()
+
             if clear:
                 self.Clear(no_mains=no_mains)
 
@@ -933,7 +943,10 @@ class TSHTeamPlayerWidget(QGroupBox):
         return prefix+" "+gamerTag if prefix else gamerTag
 
     def Clear(self, no_mains=False):
-        StateManager.BlockSaving()
+        with StateManager.SaveBlock():
+            self.DoClear(no_mains=no_mains)
+
+    def DoClear(self, no_mains=False):
         with self.dataLock:
             for c in self.findChildren(QLineEdit):
                 if c.objectName() != "" and c.objectName() != 'qt_spinbox_lineedit':
@@ -961,4 +974,3 @@ class TSHTeamPlayerWidget(QGroupBox):
                         continue  # only executed if the inner loop DID break
                 else:
                     c.setCurrentIndex(0)
-        StateManager.ReleaseSaving()

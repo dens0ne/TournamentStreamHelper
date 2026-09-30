@@ -22,9 +22,11 @@ class TSHPlayerListWidgetSignals(QObject):
 
 class TSHPlayerListWidget(QDockWidget):
     def __init__(self, *args, base="player_list"):
-        StateManager.BlockSaving()
-        super().__init__(*args)
+        with StateManager.SaveBlock():
+            super().__init__(*args)
+            self.SetupUi(base)
 
+    def SetupUi(self, base):
         self.signals = TSHPlayerListWidgetSignals()
 
         self.playerList = TSHPlayerList(base=base)
@@ -117,8 +119,6 @@ class TSHPlayerListWidget(QDockWidget):
             self.SetDefaultsFromAssets
         )
 
-        StateManager.ReleaseSaving()
-
     def LoadFromStandingsClicked(self):
         TSHTournamentDataProvider.instance.GetStandings(
             self.slotNumber.value(), self.signals.UpdateData)
@@ -154,6 +154,9 @@ class TSHPlayerListWidget(QDockWidget):
             if data is not None and len(data) > 0:
                 playerNumber = len(data[0].get("players"))
                 self.playerList.SetPlayersPerTeam(playerNumber)
+
+                self.slotNumber.setValue(len(data))
+                self.slotNumber.valueChanged.emit(len(data))
 
                 for i, slot in enumerate(self.playerList.slotWidgets):
                     try:
